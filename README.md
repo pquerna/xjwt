@@ -1,7 +1,7 @@
 # xjwt: small extensions for implementing JWT-based systems
 
-[![GoDoc](https://godoc.org/github.com/ScaleFT/xjwt?status.svg)](https://godoc.org/github.com/ScaleFT/xjwt)
-[![Build Status](https://travis-ci.org/ScaleFT/xjwt.svg?branch=master)](https://travis-ci.org/ScaleFT/xjwt)
+[![GoDoc](https://godoc.org/github.com/pquerna/xjwt?status.svg)](https://godoc.org/github.com/pquerna/xjwt)
+[![Build Status](https://travis-ci.org/pquerna/xjwt.svg?branch=main)](https://travis-ci.org/pquerna/xjwt)
 
 # Methods
 
@@ -26,3 +26,5 @@
 # License
 
 `xjwt` is licensed under the Apache License Version 2.0. See the [LICENSE file](./LICENSE) for details.
+
+`pquerna/xjwt` is a fork of unmaintained [`ScaleFT/xjwt`](https://github.com/ScaleFT/xjwt)
