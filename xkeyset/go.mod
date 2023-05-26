@@ -5,7 +5,7 @@ go 1.20
 require (
 	github.com/go-jose/go-jose/v3 v3.0.0
 	github.com/opentracing/opentracing-go v1.2.0
-	github.com/pquerna/cachecontrol v0.1.0
+	github.com/pquerna/cachecontrol v0.2.0
 	golang.org/x/net v0.10.0
 )
 
