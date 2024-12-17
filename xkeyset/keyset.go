@@ -3,18 +3,19 @@ package xkeyset
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"sync/atomic"
 	"time"
 
 	"fmt"
 
-	"io/ioutil"
-
 	jose "github.com/go-jose/go-jose/v4"
-	opentracing "github.com/opentracing/opentracing-go"
-	otext "github.com/opentracing/opentracing-go/ext"
+
 	"github.com/pquerna/cachecontrol"
+	"go.opentelemetry.io/otel"
+	semconv "go.opentelemetry.io/otel/semconv/v1.27.0"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/net/context/ctxhttp"
 )
 
@@ -52,6 +53,7 @@ func New(initCtx context.Context, opts Options) (*RemoteKeyset, error) {
 		cfunc:  cfunc,
 		opts:   opts,
 		client: opts.Client,
+		now:    time.Now,
 	}
 
 	if rk.client == nil {
@@ -71,6 +73,15 @@ func New(initCtx context.Context, opts Options) (*RemoteKeyset, error) {
 	if rk.opts.RefreshWarning == nil {
 		rk.opts.RefreshWarning = func(err error) {}
 	}
+	if span := trace.SpanFromContext(initCtx); span.SpanContext().IsValid() {
+		rk.tracerProvider = span.TracerProvider()
+	} else {
+		rk.tracerProvider = otel.GetTracerProvider()
+	}
+
+	rk.tracer = rk.tracerProvider.Tracer(
+		xjwtOpenTracingTag,
+	)
 	err := rk.init(initCtx)
 	if err != nil {
 		return nil, err
@@ -79,7 +90,9 @@ func New(initCtx context.Context, opts Options) (*RemoteKeyset, error) {
 }
 
 type RemoteKeyset struct {
-	opts Options
+	opts           Options
+	tracerProvider trace.TracerProvider
+	tracer         trace.Tracer
 
 	ctx   context.Context
 	cfunc context.CancelFunc
@@ -137,30 +150,39 @@ func (rk *RemoteKeyset) fetchKeyset(ctx context.Context) (*jose.JSONWebKeySet, t
 		req.Header.Set("User-Agent", "xjwt-keyset.go/0.1.0")
 	}
 
-	sp, ctx := opentracing.StartSpanFromContext(ctx, "xjwt.keyset.fetch")
-	otext.Component.Set(sp, xjwtOpenTracingTag)
-	otext.SpanKind.Set(sp, otext.SpanKindRPCClientEnum)
-	otext.HTTPUrl.Set(sp, req.URL.String())
-	otext.HTTPMethod.Set(sp, req.Method)
-	defer sp.Finish()
+	ctx, spn := rk.tracer.Start(
+		ctx,
+		"xjwt.keyset.fetch",
+		trace.WithSpanKind(trace.SpanKindClient),
+		trace.WithAttributes(
+			semconv.HTTPRequestMethodKey.String(req.Method),
+			semconv.URLFull(req.URL.String()),
+		),
+	)
+	defer spn.End()
 
 	resp, err := ctxhttp.Do(ctx, rk.client, req)
 	if err != nil {
-		otext.Error.Set(sp, true)
+		spn.RecordError(err)
 		return nil, time.Duration(0), err
 	}
-	otext.HTTPStatusCode.Set(sp, uint16(resp.StatusCode))
+	spn.SetAttributes(semconv.HTTPResponseStatusCode(resp.StatusCode))
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusOK {
-		return rk.parseResponse(req, resp)
+		keys, exp, err := rk.parseResponse(req, resp)
+		if err != nil {
+			spn.RecordError(err)
+			return nil, time.Duration(0), err
+		}
+		return keys, exp, nil
 	}
 
 	return nil, time.Duration(0), fmt.Errorf("xjwt.keyset: Fetch returned HTTP Status Code '%d' for '%s'", resp.StatusCode, rk.opts.URL)
 }
 
 func (rk *RemoteKeyset) parseResponse(req *http.Request, resp *http.Response) (*jose.JSONWebKeySet, time.Duration, error) {
-	data, err := ioutil.ReadAll(resp.Body)
+	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, time.Duration(0), fmt.Errorf("xjwt.keyset: Error reading response '%s': %v", rk.opts.URL, err)
 	}
@@ -177,7 +199,7 @@ func (rk *RemoteKeyset) parseResponse(req *http.Request, resp *http.Response) (*
 		return nil, time.Duration(0), fmt.Errorf("xjwt.keyset: Error parsing cache control header '%s': %v", rk.opts.URL, err)
 	}
 
-	n := time.Now()
+	n := rk.now()
 
 	exp := cacheExpires.Sub(n)
 	if exp > rk.opts.MaxCacheDuration {
