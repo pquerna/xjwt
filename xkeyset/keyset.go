@@ -3,19 +3,18 @@ package xkeyset
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"sync/atomic"
 	"time"
 
 	"fmt"
 
-	"io/ioutil"
-
 	jose "github.com/go-jose/go-jose/v4"
 
 	"github.com/pquerna/cachecontrol"
 	"go.opentelemetry.io/otel"
-	semconv "go.opentelemetry.io/otel/semconv/v1.20.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.27.0"
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/net/context/ctxhttp"
 )
@@ -54,6 +53,7 @@ func New(initCtx context.Context, opts Options) (*RemoteKeyset, error) {
 		cfunc:  cfunc,
 		opts:   opts,
 		client: opts.Client,
+		now:    time.Now,
 	}
 
 	if rk.client == nil {
@@ -155,8 +155,8 @@ func (rk *RemoteKeyset) fetchKeyset(ctx context.Context) (*jose.JSONWebKeySet, t
 		"xjwt.keyset.fetch",
 		trace.WithSpanKind(trace.SpanKindClient),
 		trace.WithAttributes(
-			semconv.HTTPMethod(req.Method),
-			semconv.HTTPURL(req.URL.String()),
+			semconv.HTTPRequestMethodKey.String(req.Method),
+			semconv.URLFull(req.URL.String()),
 		),
 	)
 	defer spn.End()
@@ -166,7 +166,7 @@ func (rk *RemoteKeyset) fetchKeyset(ctx context.Context) (*jose.JSONWebKeySet, t
 		spn.RecordError(err)
 		return nil, time.Duration(0), err
 	}
-	spn.SetAttributes(semconv.HTTPStatusCode(resp.StatusCode))
+	spn.SetAttributes(semconv.HTTPResponseStatusCode(resp.StatusCode))
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusOK {
@@ -182,7 +182,7 @@ func (rk *RemoteKeyset) fetchKeyset(ctx context.Context) (*jose.JSONWebKeySet, t
 }
 
 func (rk *RemoteKeyset) parseResponse(req *http.Request, resp *http.Response) (*jose.JSONWebKeySet, time.Duration, error) {
-	data, err := ioutil.ReadAll(resp.Body)
+	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, time.Duration(0), fmt.Errorf("xjwt.keyset: Error reading response '%s': %v", rk.opts.URL, err)
 	}
@@ -199,7 +199,7 @@ func (rk *RemoteKeyset) parseResponse(req *http.Request, resp *http.Response) (*
 		return nil, time.Duration(0), fmt.Errorf("xjwt.keyset: Error parsing cache control header '%s': %v", rk.opts.URL, err)
 	}
 
-	n := time.Now()
+	n := rk.now()
 
 	exp := cacheExpires.Sub(n)
 	if exp > rk.opts.MaxCacheDuration {
